@@ -1,0 +1,510 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>飞翔的 Brown</title>
+    <style>
+        body {
+            margin: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            background-color: #f0f0f0;
+            font-family: Arial, sans-serif;
+        }
+        #gameContainer {
+            position: relative;
+            width: 800px;
+            height: 400px;
+        }
+        canvas { 
+            border: 1px solid black; 
+            background-color: #e6f7ff;
+        }
+        #playerName { 
+            margin-bottom: 10px; 
+        }
+        #startScreen, #pauseScreen, #gameOverScreen {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            background-color: rgba(255, 255, 255, 0.9);
+        }
+        #startScreen img {
+            max-width: 60%;
+            max-height: 40%;
+            margin-bottom: 20px;
+        }
+        input, button {
+            margin: 10px;
+            padding: 5px;
+            font-size: 16px;
+        }
+        button {
+            background-color: #4CAF50;
+            border: none;
+            color: white;
+            padding: 10px 20px;
+            text-align: center;
+            text-decoration: none;
+            display: inline-block;
+            font-size: 16px;
+            margin: 4px 2px;
+            cursor: pointer;
+            border-radius: 5px;
+        }
+        #gameOverScreen img {
+            width: 100px;
+            height: 100px;
+            margin: 20px 0;
+        }
+    </style>
+</head>
+<body>
+    <div id="gameContainer">
+        <canvas id="gameCanvas" width="800" height="400"></canvas>
+        <div id="startScreen">
+            <img src="欢迎.png" alt="Welcome">
+            <input type="text" id="playerName" placeholder="输入你的名字">
+            <button id="startButton">开始游戏</button>
+        </div>
+        <div id="pauseScreen" style="display: none;">
+            <h2>游戏暂停</h2>
+            <p>按空格键继续</p>
+        </div>
+        <div id="gameOverScreen" style="display: none;">
+            <h2 id="gameOverTitle"></h2>
+            <p id="finalScore"></p>
+            <p id="highScore"></p>
+            <img id="gameOverImage" src="" alt="Game Over">
+            <button id="restartButton">重新开始</button>
+        </div>
+    </div>
+    <audio id="backgroundMusic" loop>
+        <source src="background_music.mp3" type="audio/mpeg">
+        你的浏览器不支持音频元素。
+    </audio>
+    <script>
+    // JavaScript代码将在下一部分提供
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+const startScreen = document.getElementById('startScreen');
+const pauseScreen = document.getElementById('pauseScreen');
+const gameOverScreen = document.getElementById('gameOverScreen');
+const playerNameInput = document.getElementById('playerName');
+const startButton = document.getElementById('startButton');
+const clearHighScoreButton = document.getElementById('clearHighScoreButton');
+const restartButton = document.getElementById('restartButton');
+const backgroundMusic = document.getElementById('backgroundMusic');
+
+const CANVAS_WIDTH = 800;
+const CANVAS_HEIGHT = 400;
+const BROWN_SIZE = 60;
+const CONY_SIZE = 50;
+const CHAR_SIZE = 40;
+const SURPRISE_SIZE = 40;
+
+let isAIMode = false;
+let isPaused = true;
+let gameOver = false;
+let playerName = "";
+let highScore = JSON.parse(localStorage.getItem('highScore')) || { name: "", score: 0 };
+let score = 0;
+let lastTime = 0;
+let aiMoveTimer = 0;
+const aiMoveInterval = 50;
+
+const images = {
+    brown: loadImage('brown.png'),
+    cony: loadImage('cony.png'),
+    surprise: loadImage('惊喜.png'),
+    crying: loadImage('哭泣.png'),
+    celebrate: loadImage('庆祝.png'),
+    chars: [1, 2, 3, 4].map(i => loadImage(`char${i}.png`))
+};
+
+function loadImage(src) {
+    const img = new Image();
+    img.src = src;
+    return img;
+}
+
+const brown = {
+    x: 50,
+    y: 200,
+    width: BROWN_SIZE,
+    height: BROWN_SIZE,
+    baseSpeed: 3,
+    targetX: 50,
+    targetY: 200,
+    velocityX: 0,
+    velocityY: 0,
+    draw() {
+        ctx.drawImage(images.brown, this.x, this.y, this.width, this.height);
+    },
+    moveTowards(deltaTime, cony) {
+        const dx = this.targetX - (this.x + this.width / 2);
+        const dy = this.targetY - (this.y + this.height / 2);
+        
+        const distanceToCony = Math.hypot(cony.x - this.x, cony.y - this.y);
+        const speedFactor = Math.min(2, Math.max(0.5, 1 + (CANVAS_WIDTH - distanceToCony) / CANVAS_WIDTH));
+        const currentSpeed = this.baseSpeed * speedFactor;
+
+        this.velocityX += (dx - this.velocityX) * 0.1;
+        this.velocityY += (dy - this.velocityY) * 0.1;
+        
+        const movement = currentSpeed * deltaTime / 16;
+        this.x += this.velocityX * movement / 50;
+        this.y += this.velocityY * movement / 50;
+        
+        this.x = Math.max(0, Math.min(CANVAS_WIDTH - this.width, this.x));
+        this.y = Math.max(0, Math.min(CANVAS_HEIGHT - this.height, this.y));
+    },
+    aiMove(cony, characters) {
+        const avoidDistance = 100;
+        let bestPath = {x: cony.x, y: cony.y, score: Infinity};
+
+        for (let angle = 0; angle < Math.PI * 2; angle += Math.PI / 32) {
+            let testX = this.x + Math.cos(angle) * 100;
+            let testY = this.y + Math.sin(angle) * 100;
+            
+            let pathScore = Math.hypot(testX - cony.x, testY - cony.y);
+            
+            let collision = characters.some(char => 
+                char.active && Math.hypot(testX - char.x, testY - char.y) < avoidDistance
+            );
+            
+            if (collision) {
+                pathScore = Infinity;
+            } else {
+                pathScore += Math.random() * 10;
+            }
+            
+            if (pathScore < bestPath.score) {
+                bestPath = {x: testX, y: testY, score: pathScore};
+            }
+        }
+
+        this.targetX = bestPath.x;
+        this.targetY = bestPath.y;
+    }
+};
+
+const cony = {
+    x: CANVAS_WIDTH,
+    y: Math.random() * (CANVAS_HEIGHT - CONY_SIZE),
+    width: CONY_SIZE,
+    height: CONY_SIZE,
+    speed: 3,
+    angle: Math.PI,
+    draw() {
+        ctx.drawImage(images.cony, this.x, this.y, this.width, this.height);
+    },
+    move(deltaTime) {
+        const movement = this.speed * deltaTime / 16;
+        this.x += Math.cos(this.angle) * movement;
+        this.y += Math.sin(this.angle) * movement;
+
+        if (Math.random() < 0.001 * deltaTime) {
+            this.angle = Math.PI + (Math.random() - 0.5);
+        }
+
+        if (this.x < -this.width) {
+            gameOver = true;
+        }
+
+        this.y = Math.max(0, Math.min(CANVAS_HEIGHT - this.height, this.y));
+    },
+    reset() {
+        this.x = CANVAS_WIDTH;
+        this.y = Math.random() * (CANVAS_HEIGHT - this.height);
+        this.angle = Math.PI;
+    }
+};
+
+const characters = [0, 1, 2, 3].map(i => ({
+    x: CANVAS_WIDTH + Math.random() * 200,
+    y: Math.random() * CANVAS_HEIGHT,
+    width: CHAR_SIZE,
+    height: CHAR_SIZE,
+    speed: 2 + Math.random() * 2,
+    angle: Math.PI + (Math.random() - 0.5) * 0.5,
+    active: false,
+    draw() {
+        if (this.active) {
+            ctx.drawImage(images.chars[i], this.x, this.y, this.width, this.height);
+        }
+    },
+    move(deltaTime) {
+        if (!this.active) return;
+
+        const movement = this.speed * deltaTime / 16;
+        this.x += Math.cos(this.angle) * movement;
+        this.y += Math.sin(this.angle) * movement;
+
+        if (Math.random() < 0.001 * deltaTime) {
+            this.angle = Math.PI + (Math.random() - 0.5);
+            this.speed = 2 + Math.random() * 2;
+        }
+
+        if (this.x < -this.width) {
+            this.x = CANVAS_WIDTH;
+            this.y = Math.random() * CANVAS_HEIGHT;
+            this.angle = Math.PI + (Math.random() - 0.5) * 0.5;
+        }
+
+        this.y = Math.max(0, Math.min(CANVAS_HEIGHT - this.height, this.y));
+        
+        if (isAIMode) {
+            const distToBrown = Math.hypot(this.x - brown.x, this.y - brown.y);
+            if (distToBrown < 100) {
+                this.angle = Math.atan2(this.y - brown.y, this.x - brown.x);
+                this.speed = 4;
+            }
+        }
+    }
+}));
+
+let surprises = [];
+
+function checkCollision(obj1, obj2) {
+    return obj1.x < obj2.x + obj2.width &&
+           obj1.x + obj1.width > obj2.x &&
+           obj1.y < obj2.y + obj2.height &&
+           obj1.y + obj1.height > obj2.y;
+}
+
+function activateNewCharacter() {
+    const inactiveChars = characters.filter(char => !char.active);
+    if (inactiveChars.length > 0) {
+        const randomChar = inactiveChars[Math.floor(Math.random() * inactiveChars.length)];
+        randomChar.active = true;
+    }
+}
+
+function gameLoop(currentTime) {
+    const deltaTime = currentTime - lastTime;
+    lastTime = currentTime;
+
+    ctx.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+    
+    if (!isPaused && !gameOver) {
+        if (isAIMode) {
+            aiMoveTimer += deltaTime;
+            if (aiMoveTimer >= aiMoveInterval) {
+                brown.aiMove(cony, characters);
+                aiMoveTimer = 0;
+            }
+        }
+        brown.moveTowards(deltaTime, cony);
+        cony.move(deltaTime);
+        characters.forEach(char => char.move(deltaTime));
+        
+        if (checkCollision(brown, cony)) {
+            score++;
+            surprises.push({x: cony.x, y: cony.y, time: 30});
+            cony.reset();
+
+            if (score % 10 === 0 && score < 50) {
+                activateNewCharacter();
+            }
+
+            if (score >= 50) {
+                cony.speed = 3 + (score - 50) * 0.05;
+                characters.forEach(char => {
+                    char.speed = 3 + Math.random() * 2 + (score - 50) * 0.03;
+                });
+                
+                if (score % 20 === 0) {
+                    activateNewCharacter();
+                }
+            }
+        }
+
+        for (let char of characters) {
+            if (char.active && checkCollision(brown, char)) {
+                gameOver = true;
+                break;
+            }
+        }
+    }
+    
+    brown.draw();
+    cony.draw();
+    characters.forEach(char => char.draw());
+    
+    surprises = surprises.filter(surprise => {
+        ctx.drawImage(images.surprise, surprise.x, surprise.y, SURPRISE_SIZE, SURPRISE_SIZE);
+        surprise.time--;
+        return surprise.time > 0;
+    });
+    
+    drawUI();
+    
+    if (isPaused) {
+        showPauseScreen();
+    } else if (gameOver) {
+        showGameOverScreen();
+    }
+    
+    requestAnimationFrame(gameLoop);
+}
+
+function drawUI() {
+    ctx.fillStyle = 'black';
+    ctx.font = '16px Arial';
+    ctx.textAlign = 'left';
+    ctx.fillText('分数: ' + score, 10, 20);
+    ctx.fillText('最高分: ' + highScore.score + ' (' + highScore.name + ')', 10, 40);
+    ctx.fillText('模式: ' + (isAIMode ? 'AI' : '玩家'), 10, 60);
+    ctx.fillText('状态: ' + (isPaused ? '暂停' : gameOver ? '游戏结束' : '进行中'), 10, 80);
+}
+
+function showPauseScreen() {
+    pauseScreen.style.display = 'flex';
+}
+
+function showGameOverScreen() {
+    const gameOverTitle = document.getElementById('gameOverTitle');
+    const finalScoreElement = document.getElementById('finalScore');
+    const highScoreElement = document.getElementById('highScore');
+    const gameOverImage = document.getElementById('gameOverImage');
+
+    if (score > highScore.score) {
+        gameOverTitle.textContent = '新纪录！';
+        gameOverImage.src = images.celebrate.src;
+        highScore = { name: isAIMode ? 'AI' : playerName, score: score };
+        localStorage.setItem('highScore', JSON.stringify(highScore));
+    } else {
+        gameOverTitle.textContent = '游戏结束';
+        gameOverImage.src = images.crying.src;
+    }
+
+    finalScoreElement.textContent = '最终得分: ' + score;
+    highScoreElement.textContent = '最高分: ' + highScore.score + ' (' + highScore.name + ')';
+    
+    gameOverScreen.style.display = 'flex';
+    backgroundMusic.pause();
+}
+
+function resetGame() {
+    score = 0;
+    gameOver = false;
+    isPaused = false;
+    characters.forEach(char => char.active = false);
+    brown.x = 50;
+    brown.y = 200;
+    brown.baseSpeed = 3;
+    cony.reset();
+    cony.speed = 3;
+    playerName = playerNameInput.value || "匿名玩家";
+    gameOverScreen.style.display = 'none';
+    pauseScreen.style.display = 'none';
+    backgroundMusic.play();
+}
+
+canvas.addEventListener('mousemove', (e) => {
+    if (!isAIMode && !isPaused && !gameOver) {
+        const rect = canvas.getBoundingClientRect();
+        brown.targetX = e.clientX - rect.left;
+        brown.targetY = e.clientY - rect.top;
+    }
+});
+
+document.addEventListener('keydown', (e) => {
+    if (!isAIMode && !isPaused && !gameOver) {
+        switch(e.key) {
+            case 'ArrowUp':
+                brown.targetY = Math.max(0, brown.y - brown.baseSpeed);
+                break;
+            case 'ArrowDown':
+                brown.targetY = Math.min(CANVAS_HEIGHT - brown.height, brown.y + brown.baseSpeed);
+                break;
+            case 'ArrowLeft':
+                brown.targetX = Math.max(0, brown.x - brown.baseSpeed);
+                break;
+            case 'ArrowRight':
+                brown.targetX = Math.min(CANVAS_WIDTH - brown.width, brown.x + brown.baseSpeed);
+                break;
+        }
+    }
+    if (e.key === 'a' || e.key === 'A') {
+        isAIMode = !isAIMode;
+    }
+    if (e.key === ' ') {
+        if (gameOver) {
+            resetGame();
+        } else {
+            isPaused = !isPaused;
+            if (isPaused) {
+                showPauseScreen();
+                backgroundMusic.pause();
+            } else {
+                pauseScreen.style.display = 'none';
+                backgroundMusic.play();
+            }
+        }
+    }
+});
+
+startButton.addEventListener('click', () => {
+    playerName = playerNameInput.value || "匿名玩家";
+    startScreen.style.display = 'none';
+    resetGame();
+    requestAnimationFrame(gameLoop);
+    backgroundMusic.play();
+});
+
+// 添加一个新的键盘事件监听器
+let secretCode = '';
+const resetCode = 'RESET';
+
+document.addEventListener('keydown', (e) => {
+    // 已有的键盘事件处理...
+
+    // 添加秘密代码检测
+    secretCode += e.key.toUpperCase();
+    if (secretCode.length > resetCode.length) {
+        secretCode = secretCode.slice(-resetCode.length);
+    }
+    if (secretCode === resetCode) {
+        if (confirm('确定要清空最高分吗？此操作不可撤销。')) {
+            localStorage.removeItem('highScore');
+            highScore = { name: "", score: 0 };
+            alert('最高分已清空');
+            secretCode = ''; // 重置秘密代码
+        }
+    }
+});
+
+restartButton.addEventListener('click', resetGame);
+
+function toggleMusic() {
+    if (backgroundMusic.paused) {
+        backgroundMusic.play();
+    } else {
+        backgroundMusic.pause();
+    }
+}
+
+const musicButton = document.createElement('button');
+musicButton.textContent = '音乐开/关';
+musicButton.addEventListener('click', toggleMusic);
+document.body.appendChild(musicButton);
+
+// 等待所有图片加载完成后启用开始按钮
+Promise.all(Object.values(images).flat().map(img => new Promise(resolve => img.onload = resolve)))
+    .then(() => {
+        startButton.disabled = false;
+    });
+    </script>
+</body>
+</html>
